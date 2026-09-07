@@ -2,6 +2,7 @@ import time
 import json
 import os
 import ctypes
+from pathlib import Path
 
 import pyautogui
 import pyperclip
@@ -14,11 +15,8 @@ import win32api
 from .automation_interface import AutomationInterface
 from .automation_result import AutomationResult
 
-
-CACHE_PATH = os.path.join(
-    os.path.dirname(__file__),
-    "antigravity_process_cache.json"
-)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+CACHE_PATH = str(_PROJECT_ROOT / "data" / "antigravity_process_cache.json")
 
 
 class AntigravityAutomation(AutomationInterface):
@@ -41,6 +39,7 @@ class AntigravityAutomation(AutomationInterface):
     def _save_cached_exe_name(self, exe_name):
         self._cached_exe_name = exe_name
 
+        os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
         with open(CACHE_PATH, "w") as file:
             json.dump(
                 {"exe_name": exe_name},

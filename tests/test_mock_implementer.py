@@ -1,15 +1,36 @@
-from src.implementer import MockImplementer
+import unittest
+
+from src.implementer.mock_implementer import MockImplementer
+from src.implementer.implementer_result import ImplementerResult
 
 
-def test_mock_implementer():
-    implementer = MockImplementer()
+class TestMockImplementer(unittest.TestCase):
 
-    result = implementer.execute(
-        "Create a Python function that adds two numbers"
-    )
+    def test_execute_returns_implementer_result(self):
+        implementer = MockImplementer()
+        result = implementer.execute("Create a test function")
+        self.assertIsInstance(result, ImplementerResult)
 
-    print(result)
+    def test_execute_returns_success(self):
+        implementer = MockImplementer()
+        result = implementer.execute("Create a test function")
+        self.assertTrue(result.success)
+
+    def test_execute_has_message(self):
+        implementer = MockImplementer()
+        result = implementer.execute("Create a test function")
+        self.assertIn("Mock implementation completed", result.message)
+
+    def test_execute_has_output_with_task(self):
+        implementer = MockImplementer()
+        result = implementer.execute("Create a test function")
+        self.assertIn("Create a test function", result.output)
+
+    def test_execute_has_no_error(self):
+        implementer = MockImplementer()
+        result = implementer.execute("Create a test function")
+        self.assertIsNone(result.error)
 
 
 if __name__ == "__main__":
-    test_mock_implementer()
+    unittest.main()

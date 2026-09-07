@@ -5,6 +5,7 @@ from typing import Any, Optional
 from src.automation.claude_sender import send_prompt
 from src.automation.claude_waiter import wait_for_response
 from src.automation.claude_response import capture_latest_response
+from src.automation.explorer_automation import select_report_file
 from src.implementer.implementer_manager import ImplementerManager
 from src.memory.conversation_store import save_interaction
 from src.reviewer.report_waiter import wait_for_report
@@ -35,6 +36,8 @@ def run_phase(
     project_name: str,
     project_path: str,
     event_callback: Optional[EventCallback] = None,
+    retry_feedback: Optional[list] = None,
+    attempt_number: int = 1,
 ) -> PhaseExecutionResult:
     """
     Execute one complete implementation -> report waiting -> review cycle.
@@ -47,6 +50,9 @@ def run_phase(
         claude: Reference to the Claude browser/UI automation window.
         project_name: Name of the current project.
         project_path: Filesystem path to the project root.
+        event_callback: Optional callback for orchestrator events.
+        retry_feedback: Optional list of reviewer issues from a previous attempt.
+        attempt_number: Current attempt number for this phase.
 
     Returns:
         PhaseExecutionResult: The validated review result and execution artifacts.
@@ -100,7 +106,9 @@ def run_phase(
     )
 
     implementer_result = manager.execute_task(
-        worker_task
+        worker_task,
+        retry_feedback=retry_feedback,
+        attempt_number=attempt_number,
     )
 
     # =========================
@@ -157,7 +165,10 @@ def run_phase(
                 f"{phase_state.get_report_path()}"
             ),
             response=implementer_result.output,
-            status="dispatched"
+            status="dispatched",
+            project_name=project_name,
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
         )
     )
 
@@ -207,6 +218,27 @@ def run_phase(
         level="SUCCESS",
         data={"report_path": phase_state.get_report_path()},
     )
+
+    # =========================
+    # VISUAL REPORT SELECTION (EXPLORER)
+    # =========================
+
+    try:
+        select_report_file(
+            project_path=project_path,
+            report_path=phase_state.get_report_path(),
+        )
+        emit_event(
+            event_callback,
+            EventType.EXPLORER_REPORT_SELECTED,
+            f"Explorer selected report file: {phase_state.get_report_path()}",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="INFO",
+            data={"report_path": phase_state.get_report_path()},
+        )
+    except Exception as explorer_err:
+        print(f"[WARN] Explorer report selection warning: {explorer_err}")
 
     # =========================
     # BUILD REVIEWER PROMPT

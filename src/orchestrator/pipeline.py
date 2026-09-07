@@ -6,6 +6,7 @@ from src.automation.claude_waiter import wait_for_response
 from src.automation.claude_response import capture_latest_response
 
 from src.automation.antigravity_automation import AntigravityAutomation
+from src.automation.explorer_automation import open_project_workspace
 
 from src.memory.conversation_store import save_interaction, save_project_execution
 
@@ -67,6 +68,24 @@ def run_orchestrator(
             project_path=setup.project_path,
             original_requirements=setup.user_request,
         )
+
+        # =========================
+        # VISUAL WORKSPACE CONTEXT (EXPLORER)
+        # =========================
+
+        try:
+            open_project_workspace(setup.project_path)
+            emit_event(
+                event_callback,
+                EventType.EXPLORER_WORKSPACE_OPENED,
+                f"Explorer opened workspace context at {setup.project_path}",
+                phase=phase_state.current_phase,
+                attempt=phase_state.current_attempt,
+                level="INFO",
+                data={"project_path": setup.project_path},
+            )
+        except Exception as explorer_err:
+            print(f"[WARN] Explorer workspace automation warning: {explorer_err}")
 
         # =========================
         # BUILD PLANNER PROMPT
@@ -241,7 +260,10 @@ def run_orchestrator(
             model="Claude Sonnet",
             prompt=planner_prompt,
             response=response,
-            status="completed"
+            status="completed",
+            project_name=setup.project_name,
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
         )
 
         workflow.transition(
@@ -319,6 +341,7 @@ def run_orchestrator(
         # =====================================
 
         implementer_interaction_id = None
+        retry_feedback = None
 
         while True:
 
@@ -356,6 +379,8 @@ def run_orchestrator(
                 project_name=setup.project_name,
                 project_path=setup.project_path,
                 event_callback=event_callback,
+                retry_feedback=retry_feedback,
+                attempt_number=phase_state.current_attempt,
             )
 
             implementer_interaction_id = (
@@ -368,10 +393,63 @@ def run_orchestrator(
             # =================================
 
             # =========================
-            # NEXT PHASE
+            # BLOCKED — ALWAYS FIRST
             # =========================
 
             if (
+                review_result.decision
+                == "BLOCKED"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "WORKFLOW BLOCKED"
+                )
+                print(
+                    "================================"
+                )
+
+                if summary is not None:
+                    summary.phase_history.append(
+                        PhaseRecord(
+                            phase_number=phase_state.current_phase,
+                            attempts=phase_state.current_attempt,
+                            objective=worker_task.objective,
+                            final_decision=review_result.decision,
+                            status="FAILED",
+                            summary=review_result.summary,
+                            issues=review_result.issues,
+                            report_files=[phase_state.get_report_path()],
+                        )
+                    )
+                    summary.total_attempts += phase_state.current_attempt
+                    summary.mark_completed("BLOCKED", error=review_result.summary)
+                    try:
+                        save_final_report(summary)
+                    except Exception:
+                        pass
+
+                emit_event(
+                    event_callback,
+                    EventType.PROJECT_BLOCKED,
+                    f"Workflow blocked: {review_result.summary}",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="ERROR",
+                    data={"summary": review_result.summary},
+                )
+
+                raise RuntimeError(
+                    review_result.summary
+                )
+
+            # =========================
+            # APPROVED + NEXT PHASE
+            # =========================
+
+            elif (
                 review_result.decision == "APPROVED"
                 and review_result.next_action == "NEXT_PHASE"
             ):
@@ -435,6 +513,9 @@ def run_orchestrator(
                     phase_number=phase_state.current_phase
                 )
 
+                # Clear retry feedback for new phase
+                retry_feedback = None
+
                 workflow.transition(
                     WorkflowState.READY_FOR_WORKER
                 )
@@ -443,67 +524,12 @@ def run_orchestrator(
                 continue
 
             # =========================
-            # RETRY SAME PHASE
+            # APPROVED + STOP (SUCCESS)
             # =========================
 
-            if (
-                review_result.next_action
-                == "RETRY_PHASE"
-            ):
-
-                print(
-                    "\n================================"
-                )
-                print(
-                    "RETRYING CURRENT PHASE"
-                )
-                print(
-                    "================================"
-                )
-
-                if summary is not None:
-                    summary.total_retries += 1
-
-                if phase_state.can_retry():
-
-                    emit_event(
-                        event_callback,
-                        EventType.RETRY_PHASE,
-                        f"Retrying Phase {phase_state.current_phase} (Attempt {phase_state.current_attempt + 1})...",
-                        phase=phase_state.current_phase,
-                        attempt=phase_state.current_attempt,
-                        level="WARNING",
-                        data={"decision": review_result.decision, "issues": review_result.issues},
-                    )
-
-                    phase_state.next_attempt()
-
-                    print(
-                        "\nRetrying Phase:",
-                        phase_state.current_phase
-                    )
-
-                    print(
-                        "New Attempt:",
-                        phase_state.current_attempt
-                    )
-
-                    # Same task reused
-                    continue
-
-                raise RuntimeError(
-                    f"Maximum attempts exceeded "
-                    f"for Phase "
-                    f"{phase_state.current_phase}"
-                )
-
-            # =========================
-            # PROJECT COMPLETE
-            # =========================
-
-            if (
-                review_result.next_action
-                == "STOP"
+            elif (
+                review_result.decision == "APPROVED"
+                and review_result.next_action == "STOP"
             ):
 
                 print(
@@ -574,12 +600,71 @@ def run_orchestrator(
                 break
 
             # =========================
+            # CORRECTION_NEEDED + RETRY
+            # =========================
+
+            elif (
+                review_result.decision == "CORRECTION_NEEDED"
+                and review_result.next_action == "RETRY_PHASE"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "RETRYING CURRENT PHASE"
+                )
+                print(
+                    "================================"
+                )
+
+                if summary is not None:
+                    summary.total_retries += 1
+
+                if phase_state.can_retry():
+
+                    emit_event(
+                        event_callback,
+                        EventType.RETRY_PHASE,
+                        f"Retrying Phase {phase_state.current_phase} (Attempt {phase_state.current_attempt + 1})...",
+                        phase=phase_state.current_phase,
+                        attempt=phase_state.current_attempt,
+                        level="WARNING",
+                        data={"decision": review_result.decision, "issues": review_result.issues},
+                    )
+
+                    # Store reviewer feedback for retry
+                    retry_feedback = review_result.issues or []
+                    if review_result.summary:
+                        retry_feedback = [review_result.summary] + list(retry_feedback)
+
+                    phase_state.next_attempt()
+
+                    print(
+                        "\nRetrying Phase:",
+                        phase_state.current_phase
+                    )
+
+                    print(
+                        "New Attempt:",
+                        phase_state.current_attempt
+                    )
+
+                    # Same task reused with feedback
+                    continue
+
+                raise RuntimeError(
+                    f"Maximum attempts exceeded "
+                    f"for Phase "
+                    f"{phase_state.current_phase}"
+                )
+
+            # =========================
             # REPLAN REQUIRED
             # =========================
 
-            if (
-                review_result.next_action
-                == "REPLAN"
+            elif (
+                review_result.decision == "REPLAN"
             ):
 
                 print(
@@ -631,67 +716,15 @@ def run_orchestrator(
                 )
 
             # =========================
-            # BLOCKED
-            # =========================
-
-            if (
-                review_result.decision
-                == "BLOCKED"
-            ):
-
-                print(
-                    "\n================================"
-                )
-                print(
-                    "WORKFLOW BLOCKED"
-                )
-                print(
-                    "================================"
-                )
-
-                if summary is not None:
-                    summary.phase_history.append(
-                        PhaseRecord(
-                            phase_number=phase_state.current_phase,
-                            attempts=phase_state.current_attempt,
-                            objective=worker_task.objective,
-                            final_decision=review_result.decision,
-                            status="FAILED",
-                            summary=review_result.summary,
-                            issues=review_result.issues,
-                            report_files=[phase_state.get_report_path()],
-                        )
-                    )
-                    summary.total_attempts += phase_state.current_attempt
-                    summary.mark_completed("BLOCKED", error=review_result.summary)
-                    try:
-                        save_final_report(summary)
-                    except Exception:
-                        pass
-
-                emit_event(
-                    event_callback,
-                    EventType.PROJECT_BLOCKED,
-                    f"Workflow blocked: {review_result.summary}",
-                    phase=phase_state.current_phase,
-                    attempt=phase_state.current_attempt,
-                    level="ERROR",
-                    data={"summary": review_result.summary},
-                )
-
-                raise RuntimeError(
-                    review_result.summary
-                )
-
-            # =========================
             # UNKNOWN RESULT
             # =========================
 
-            raise RuntimeError(
-                "Unhandled reviewer decision: "
-                f"{review_result.decision} / "
-                f"{review_result.next_action}"
-            )
+            else:
+                raise RuntimeError(
+                    "Unhandled reviewer decision: "
+                    f"{review_result.decision} / "
+                    f"{review_result.next_action}"
+                )
 
         # =========================
         # FINAL SUMMARY

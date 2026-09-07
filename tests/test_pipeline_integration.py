@@ -85,6 +85,7 @@ class TestPipelineEventIntegration(unittest.TestCase):
 
         # Verify key pipeline events occurred in order
         self.assertIn(EventType.PROJECT_SETUP_STARTED, event_types)
+        self.assertIn(EventType.EXPLORER_WORKSPACE_OPENED, event_types)
         self.assertIn(EventType.REQUIREMENTS_RECEIVED, event_types)
         self.assertIn(EventType.PLANNER_STARTED, event_types)
         self.assertIn(EventType.PLANNER_RESPONSE_RECEIVED, event_types)

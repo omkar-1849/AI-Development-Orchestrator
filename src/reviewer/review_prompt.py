@@ -88,6 +88,8 @@ Allowed next actions:
 
 IMPORTANT RULES:
 
+- All JSON string values must be valid JSON. Do not include literal newline, tab, or carriage-return characters inside string values. Keep string values single-line or use valid JSON escape sequences such as \\n and \\t.
+
 - If decision is APPROVED and next_action is NEXT_PHASE,
   next_phase MUST contain a complete implementation task.
 

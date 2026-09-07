@@ -1,6 +1,7 @@
 import json
 
 from src.reviewer.review_contract import ReviewResult
+from src.utils.json_extractor import extract_json_object, JsonExtractionError
 
 
 VALID_DECISIONS = {
@@ -22,9 +23,9 @@ VALID_NEXT_ACTIONS = {
 def validate_review_response(response):
 
     try:
-        data = json.loads(response)
+        data = extract_json_object(response)
 
-    except json.JSONDecodeError:
+    except JsonExtractionError:
         raise ValueError(
             "Reviewer response is not valid JSON"
         )

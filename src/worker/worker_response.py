@@ -1,10 +1,9 @@
-from dataclasses import dataclass
+"""
+[DEPRECATED] WorkerResponse is legacy code from the earlier Claude-as-Worker architecture.
+It has been moved to src.worker._legacy.worker_response.
+The current orchestrator uses AntigravityAdapter and ImplementerResult.
+"""
 
+from src.worker._legacy.worker_response import WorkerResponse
 
-@dataclass
-class WorkerResponse:
-    implementation_summary: str
-    files_modified: list[str]
-    changes_made: list[str]
-    acceptance_check: list[str]
-    blockers: str
+__all__ = ["WorkerResponse"]

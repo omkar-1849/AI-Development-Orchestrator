@@ -1,6 +1,7 @@
 import json
 
 from src.planner.planner_contract import PlannerTask
+from src.utils.json_extractor import extract_json_object, JsonExtractionError
 
 
 REQUIRED_FIELDS = [
@@ -22,9 +23,9 @@ def validate_planner_response(response: str) -> PlannerTask:
     """
 
     try:
-        data = json.loads(response)
+        data = extract_json_object(response)
 
-    except json.JSONDecodeError as error:
+    except JsonExtractionError as error:
         raise ValueError(
             f"Planner response is not valid JSON: {error}"
         )

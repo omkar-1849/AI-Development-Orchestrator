@@ -1,14 +1,15 @@
+import unittest
+
 from src.worker.worker_validator import (
     validate_worker_response,
     WorkerValidationError,
 )
 
 
-def test_valid_response():
+class TestLegacyWorkerValidator(unittest.TestCase):
 
-    print("\n--- TEST 1 - VALID RESPONSE ---")
-
-    response = """
+    def test_valid_response(self):
+        response = """
 {
     "implementation_summary": "Calculator module implemented successfully",
     "files_modified": [
@@ -27,63 +28,33 @@ def test_valid_response():
     "blockers": "NONE"
 }
 """
-
-    try:
         result = validate_worker_response(response)
+        self.assertEqual(result.implementation_summary, "Calculator module implemented successfully")
+        self.assertEqual(result.files_modified, ["calculator.py", "test_calculator.py"])
+        self.assertEqual(result.blockers, "NONE")
 
-        print("ACCEPTED")
-        print("Summary:", result.implementation_summary)
-
-    except WorkerValidationError as error:
-        print("REJECTED")
-        print("Reason:", error)
-
-
-def test_invalid_json():
-
-    print("\n--- TEST 2 - INVALID JSON ---")
-
-    response = """
+    def test_invalid_json_raises(self):
+        response = """
 {
     "implementation_summary": "Test"
     "files_modified": []
 }
 """
+        with self.assertRaises(WorkerValidationError):
+            validate_worker_response(response)
 
-    try:
-        validate_worker_response(response)
-        print("ERROR: Invalid response accepted")
-
-    except WorkerValidationError as error:
-        print("REJECTED")
-        print("Reason:", error)
-
-
-def test_missing_fields():
-
-    print("\n--- TEST 3 - MISSING FIELDS ---")
-
-    response = """
+    def test_missing_fields_raises(self):
+        response = """
 {
     "implementation_summary": "Test",
     "files_modified": []
 }
 """
+        with self.assertRaises(WorkerValidationError):
+            validate_worker_response(response)
 
-    try:
-        validate_worker_response(response)
-        print("ERROR: Invalid response accepted")
-
-    except WorkerValidationError as error:
-        print("REJECTED")
-        print("Reason:", error)
-
-
-def test_wrong_type():
-
-    print("\n--- TEST 4 - WRONG TYPE ---")
-
-    response = """
+    def test_wrong_type_raises(self):
+        response = """
 {
     "implementation_summary": "Test",
     "files_modified": "calculator.py",
@@ -92,19 +63,9 @@ def test_wrong_type():
     "blockers": "NONE"
 }
 """
-
-    try:
-        validate_worker_response(response)
-        print("ERROR: Invalid response accepted")
-
-    except WorkerValidationError as error:
-        print("REJECTED")
-        print("Reason:", error)
+        with self.assertRaises(WorkerValidationError):
+            validate_worker_response(response)
 
 
 if __name__ == "__main__":
-
-    test_valid_response()
-    test_invalid_json()
-    test_missing_fields()
-    test_wrong_type()
+    unittest.main()

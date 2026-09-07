@@ -45,11 +45,23 @@ def validate_project_name(project_name: str) -> str:
     return project_name
 
 
+def get_default_workspace_base_dir() -> Path:
+    """
+    Dynamically resolve the default workspace base directory for the current user.
+
+    Prefers ~/Desktop/AIProjects if the Desktop directory exists;
+    otherwise falls back to ~/AIProjects.
+    """
+    home = Path.home()
+    desktop = home / "Desktop"
+    if desktop.exists():
+        return desktop / "AIProjects"
+    return home / "AIProjects"
+
+
 def create_project_workspace(
     project_name: str,
-    base_path: str = (
-        "C:/Users/omkar/Desktop/AIProjects"
-    )
+    base_path: str | Path | None = None,
 ) -> ProjectWorkspace:
     """
     Create and initialize a project workspace.
@@ -65,7 +77,10 @@ def create_project_workspace(
         project_name
     )
 
-    base_directory = Path(base_path)
+    if base_path is None:
+        base_directory = get_default_workspace_base_dir()
+    else:
+        base_directory = Path(base_path)
 
     project_path = (
         base_directory / project_name

@@ -20,6 +20,7 @@ IMPORTANT RULES:
 6. Every field is required.
 7. instructions, files_allowed, and acceptance_criteria
    must be JSON arrays of strings.
+8. All JSON string values must be valid JSON. Do not include literal newline, tab, or carriage-return characters inside string values. Keep string values single-line or use valid JSON escape sequences such as \\n and \\t.
 
 Required JSON schema:
 

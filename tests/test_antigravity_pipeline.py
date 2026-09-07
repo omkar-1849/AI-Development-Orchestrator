@@ -1,73 +1,77 @@
+import unittest
+from unittest.mock import MagicMock
+
 from src.worker.worker_task import WorkerTask
 from src.implementer.implementer_manager import ImplementerManager
 from src.implementer.implementer_session import ImplementerSession
+from src.implementer.implementer_result import ImplementerResult
 from src.implementer.antigravity_adapter import AntigravityAdapter
-from src.automation.antigravity_automation import AntigravityAutomation
+from src.automation.mock_automation import MockAutomation
+from src.state.phase_state import PhaseState
 
 
-def test_antigravity_pipeline():
+class TestAntigravityPipeline(unittest.TestCase):
+    """Test the Antigravity implementer pipeline using MockAutomation."""
 
-    # One session for the whole project
-    session = ImplementerSession(
-        project_name="TestProject"
-    )
+    def _make_pipeline(self):
+        automation = MockAutomation()
+        implementer = AntigravityAdapter(automation=automation)
+        session = ImplementerSession(
+            project_name="TestProject",
+            project_path="/tmp/test-project",
+        )
+        phase_state = PhaseState(project_name="TestProject")
+        manager = ImplementerManager(
+            implementer=implementer,
+            session=session,
+            phase_state=phase_state,
+        )
+        return manager
 
-    automation = AntigravityAutomation()
+    def _make_task(self, task_id="test-001", objective="Reply with HI only"):
+        return WorkerTask(
+            task_id=task_id,
+            objective=objective,
+            instructions=["Reply with exactly: HI"],
+            files_allowed=[],
+            acceptance_criteria=["Response must be exactly HI"],
+        )
 
-    implementer = AntigravityAdapter(
-        automation=automation
-    )
+    def test_single_task_execution(self):
+        manager = self._make_pipeline()
+        task = self._make_task()
+        result = manager.execute_task(task)
+        self.assertIsInstance(result, ImplementerResult)
+        self.assertTrue(result.success)
 
-    manager = ImplementerManager(
-        implementer=implementer,
-        session=session
-    )
+    def test_multiple_task_execution(self):
+        manager = self._make_pipeline()
 
-    # ---------------- TASK 1 ----------------
+        task_1 = self._make_task("test-001", "Reply with HI only")
+        result_1 = manager.execute_task(task_1)
+        self.assertTrue(result_1.success)
 
-    task_1 = WorkerTask(
-        task_id="test-001",
-        objective="Reply with HI only",
-        instructions=[
-            "Reply with exactly: HI"
-        ],
-        files_allowed=[],
-        acceptance_criteria=[
-            "Response must be exactly HI"
-        ]
-    )
+        task_2 = self._make_task(
+            "test-002",
+            "Add a greeting function to the existing main.py",
+        )
+        result_2 = manager.execute_task(task_2)
+        self.assertTrue(result_2.success)
 
-    print("\n--- EXECUTING TASK 1 ---\n")
+    def test_session_initialized_after_first_task(self):
+        manager = self._make_pipeline()
+        self.assertFalse(manager.session.initialized)
 
-    result_1 = manager.execute_task(task_1)
+        task = self._make_task()
+        manager.execute_task(task)
+        self.assertTrue(manager.session.initialized)
 
-    print(result_1)
-
-    # ---------------- TASK 2 ----------------
-
-    task_2 = WorkerTask(
-        task_id="test-002",
-        objective="Add a greeting function to the existing main.py",
-        instructions=[
-            "Continue working in the existing project",
-            "Add a function named greet",
-            "The function should print Welcome"
-        ],
-        files_allowed=[
-            "main.py"
-        ],
-        acceptance_criteria=[
-            "greet function exists",
-            "Calling greet prints Welcome"
-        ]
-    )
-
-    print("\n--- EXECUTING TASK 2 ---\n")
-
-    result_2 = manager.execute_task(task_2)
-
-    print(result_2)
+    def test_result_has_output(self):
+        manager = self._make_pipeline()
+        task = self._make_task()
+        result = manager.execute_task(task)
+        self.assertIsNotNone(result.output)
 
 
 if __name__ == "__main__":
-    test_antigravity_pipeline()
+    unittest.main()

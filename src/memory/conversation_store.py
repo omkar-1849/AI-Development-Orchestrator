@@ -1,3 +1,5 @@
+from typing import Optional
+
 from src.memory.database import get_connection
 
 
@@ -6,7 +8,10 @@ def save_interaction(
     model: str,
     prompt: str,
     response: str,
-    status: str = "completed"
+    status: str = "completed",
+    project_name: Optional[str] = None,
+    phase: Optional[int] = None,
+    attempt: Optional[int] = None,
 ):
     """Save an AI interaction to the SQLite database."""
 
@@ -20,16 +25,22 @@ def save_interaction(
             model,
             prompt,
             response,
-            status
+            status,
+            project_name,
+            phase,
+            attempt
         )
-        VALUES (?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             agent,
             model,
             prompt,
             response,
-            status
+            status,
+            project_name,
+            phase,
+            attempt,
         )
     )
 
@@ -58,7 +69,10 @@ def get_interaction(interaction_id: int):
             prompt,
             response,
             status,
-            created_at
+            created_at,
+            project_name,
+            phase,
+            attempt
         FROM interactions
         WHERE id = ?
         """,
@@ -87,7 +101,10 @@ def get_latest_interaction():
             prompt,
             response,
             status,
-            created_at
+            created_at,
+            project_name,
+            phase,
+            attempt
         FROM interactions
         ORDER BY id DESC
         LIMIT 1
@@ -99,6 +116,39 @@ def get_latest_interaction():
     connection.close()
 
     return interaction
+
+
+def get_project_interactions(project_name: str):
+    """Retrieve all interactions for a specific project."""
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            id,
+            agent,
+            model,
+            prompt,
+            response,
+            status,
+            created_at,
+            project_name,
+            phase,
+            attempt
+        FROM interactions
+        WHERE project_name = ?
+        ORDER BY id ASC
+        """,
+        (project_name,)
+    )
+
+    interactions = cursor.fetchall()
+
+    connection.close()
+
+    return interactions
 
 
 def save_project_execution(

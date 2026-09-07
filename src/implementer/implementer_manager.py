@@ -8,7 +8,7 @@ class ImplementerManager:
         self.session = session
         self.phase_state = phase_state
 
-    def execute_task(self, worker_task):
+    def execute_task(self, worker_task, retry_feedback=None, attempt_number=1):
 
         report_path = self.phase_state.get_report_path()
 
@@ -21,6 +21,14 @@ class ImplementerManager:
             )
 
             self.session.initialized = True
+
+        elif retry_feedback:
+            prompt = ImplementerPromptBuilder.build_retry_prompt(
+                worker_task,
+                report_path,
+                retry_feedback,
+                attempt_number
+            )
 
         else:
             prompt = ImplementerPromptBuilder.build_task_prompt(

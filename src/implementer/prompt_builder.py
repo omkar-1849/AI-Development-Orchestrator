@@ -100,3 +100,68 @@ Keep the chat response concise.
 
 Start now.
 """.strip()
+
+    @staticmethod
+    def build_retry_prompt(worker_task, report_path, retry_feedback, attempt_number):
+        issues_text = ""
+        if retry_feedback:
+            numbered_issues = "\n".join(
+                f"{i + 1}. {issue}"
+                for i, issue in enumerate(retry_feedback)
+            )
+            issues_text = f"""
+
+PREVIOUS REVIEW FEEDBACK — MUST BE FIXED
+
+The previous implementation attempt was reviewed and corrections are required.
+
+Issues identified:
+
+{numbered_issues}
+
+You must address every issue above.
+
+Do not merely repeat the previous implementation.
+Inspect the existing project state and correct the identified problems.
+
+This is retry attempt {attempt_number}.
+"""
+
+        return f"""
+RETRY TASK FROM ORCHESTRATOR
+
+Task ID: {worker_task.task_id}
+
+Objective:
+{worker_task.objective}
+
+Instructions:
+{chr(10).join(f"- {instruction}" for instruction in worker_task.instructions)}
+
+Files Allowed:
+{chr(10).join(f"- {file}" for file in worker_task.files_allowed)}
+
+Acceptance Criteria:
+{chr(10).join(f"- {criteria}" for criteria in worker_task.acceptance_criteria)}
+{issues_text}
+IMPORTANT:
+
+- Continue working in the existing project folder.
+- Fix the issues identified above.
+- Verify the acceptance criteria.
+
+Write the implementation report EXACTLY to:
+
+{report_path}
+
+Do not choose another report filename.
+Do not overwrite previous reports.
+
+The FINAL line of the report MUST be:
+
+<!-- REPORT_END -->
+
+Keep the chat response concise.
+
+Start now.
+""".strip()

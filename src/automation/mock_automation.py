@@ -1,4 +1,5 @@
 from .automation_interface import AutomationInterface
+from .automation_result import AutomationResult
 
 
 class MockAutomation(AutomationInterface):
@@ -8,4 +9,7 @@ class MockAutomation(AutomationInterface):
         print(prompt)
         print("--- END PROMPT ---\n")
 
-        return "Mock automation completed"
+        return AutomationResult(
+            success=True,
+            output="Mock automation completed"
+        )
