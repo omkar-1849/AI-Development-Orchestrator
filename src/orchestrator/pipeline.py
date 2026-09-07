@@ -1,0 +1,776 @@
+from typing import Callable, Optional
+
+from src.automation.claude_launcher import find_claude
+from src.automation.claude_sender import send_prompt
+from src.automation.claude_waiter import wait_for_response
+from src.automation.claude_response import capture_latest_response
+
+from src.automation.antigravity_automation import AntigravityAutomation
+
+from src.memory.conversation_store import save_interaction, save_project_execution
+
+from src.state.workflow_state import WorkflowState
+
+from src.planner.planner_prompt import build_planner_prompt
+from src.planner.planner_validator import validate_planner_response
+
+from src.worker.task_dispatcher import dispatch_task
+from src.worker.next_phase_dispatcher import dispatch_next_phase
+
+from src.implementer.antigravity_adapter import AntigravityAdapter
+from src.implementer.implementer_session import ImplementerSession
+from src.implementer.implementer_manager import ImplementerManager
+
+from src.orchestrator.setup import (
+    OrchestratorSetup,
+    setup_orchestrator,
+)
+from src.orchestrator.phase_runner import run_phase
+from src.orchestrator.events import EventCallback, EventType, emit_event
+from src.reporting.final_report_generator import (
+    PhaseRecord,
+    ProjectExecutionSummary,
+    save_final_report,
+)
+
+
+def run_orchestrator(
+    project_name: Optional[str] = None,
+    project_path: Optional[str] = None,
+    requirement_collector: Optional[Callable[[], str]] = None,
+    user_requirements: Optional[str] = None,
+    event_callback: Optional[EventCallback] = None,
+) -> None:
+    """
+    Main entry point for running the complete AI Development Orchestrator pipeline.
+
+    Coordinates environment setup, Planner execution and validation, initial Worker
+    task dispatch, Implementer setup, and the autonomous multi-phase development loop.
+    """
+
+    summary: Optional[ProjectExecutionSummary] = None
+
+    try:
+        setup = setup_orchestrator(
+            project_name=project_name,
+            project_path=project_path,
+            requirement_collector=requirement_collector,
+            user_requirements=user_requirements,
+            event_callback=event_callback,
+        )
+
+        workflow = setup.workflow
+        phase_state = setup.phase_state
+
+        summary = ProjectExecutionSummary(
+            project_name=setup.project_name,
+            project_path=setup.project_path,
+            original_requirements=setup.user_request,
+        )
+
+        # =========================
+        # BUILD PLANNER PROMPT
+        # =========================
+
+        emit_event(
+            event_callback,
+            EventType.PLANNER_STARTED,
+            "Planner is analyzing project requirements...",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="INFO",
+        )
+
+        planner_prompt = build_planner_prompt(
+            setup.user_request
+        )
+
+        print("\nBuilding Planner prompt...")
+
+        workflow.transition(
+            WorkflowState.PLANNING
+        )
+
+        # =========================
+        # FIND CLAUDE
+        # =========================
+
+        print("\nFinding Claude...")
+
+        claude = find_claude()
+
+        if claude is None:
+            raise RuntimeError(
+                "Claude window could not be found"
+            )
+
+        # =========================
+        # SEND PLANNER PROMPT
+        # =========================
+
+        print(
+            "\nSending Planner prompt to Claude..."
+        )
+
+        send_prompt(
+            claude,
+            planner_prompt
+        )
+
+        workflow.transition(
+            WorkflowState.WAITING_FOR_RESPONSE
+        )
+
+        # =========================
+        # WAIT FOR PLANNER RESPONSE
+        # =========================
+
+        print(
+            "\nWaiting for Planner response..."
+        )
+
+        wait_for_response(
+            claude
+        )
+
+        workflow.transition(
+            WorkflowState.RESPONSE_RECEIVED
+        )
+
+        # =========================
+        # CAPTURE PLANNER RESPONSE
+        # =========================
+
+        print(
+            "\nCapturing Planner response..."
+        )
+
+        response = capture_latest_response(
+            claude
+        )
+
+        if not response:
+            raise RuntimeError(
+                "Failed to capture Claude response"
+            )
+
+        emit_event(
+            event_callback,
+            EventType.PLANNER_RESPONSE_RECEIVED,
+            "Planner response received from Claude",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="INFO",
+        )
+
+        print(
+            "\n--- RAW PLANNER RESPONSE ---\n"
+        )
+
+        print(response)
+
+        # =========================
+        # VALIDATE PLANNER RESPONSE
+        # =========================
+
+        print(
+            "\nValidating Planner response..."
+        )
+
+        task = validate_planner_response(
+            response
+        )
+
+        emit_event(
+            event_callback,
+            EventType.PLANNER_VALIDATED,
+            f"Planner response accepted: {task.objective}",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="SUCCESS",
+            data={
+                "task_id": task.task_id,
+                "objective": task.objective,
+                "instructions": task.instructions,
+                "files_allowed": task.files_allowed,
+                "acceptance_criteria": task.acceptance_criteria,
+            },
+        )
+
+        print(
+            "\nPLANNER RESPONSE ACCEPTED"
+        )
+
+        # =========================
+        # DISPLAY STRUCTURED TASK
+        # =========================
+
+        print(
+            "\n--- STRUCTURED TASK ---\n"
+        )
+
+        print("Task ID:", task.task_id)
+        print("Status:", task.status)
+        print("Objective:", task.objective)
+
+        print("\nInstructions:")
+
+        for instruction in task.instructions:
+            print("-", instruction)
+
+        print("\nFiles Allowed:")
+
+        for file in task.files_allowed:
+            print("-", file)
+
+        print("\nAcceptance Criteria:")
+
+        for criteria in task.acceptance_criteria:
+            print("-", criteria)
+
+        # =========================
+        # STORE PLANNER INTERACTION
+        # =========================
+
+        print(
+            "\nSaving Planner interaction..."
+        )
+
+        planner_interaction_id = save_interaction(
+            agent="planner",
+            model="Claude Sonnet",
+            prompt=planner_prompt,
+            response=response,
+            status="completed"
+        )
+
+        workflow.transition(
+            WorkflowState.STORED
+        )
+
+        workflow.transition(
+            WorkflowState.READY_FOR_WORKER
+        )
+
+        # =========================
+        # DISPATCH INITIAL TASK
+        # =========================
+
+        print(
+            "\nDispatching initial task to Worker..."
+        )
+
+        emit_event(
+            event_callback,
+            EventType.WORKER_STARTED,
+            f"Worker preparing task {task.task_id}...",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="INFO",
+        )
+
+        worker_task = dispatch_task(
+            task
+        )
+
+        emit_event(
+            event_callback,
+            EventType.TASK_DISPATCHED,
+            f"Task {task.task_id} dispatched to Worker: {task.objective}",
+            phase=phase_state.current_phase,
+            attempt=phase_state.current_attempt,
+            level="SUCCESS",
+            data={"task_id": task.task_id, "objective": task.objective},
+        )
+
+        # =========================
+        # INITIALIZE IMPLEMENTER
+        # =========================
+
+        print(
+            "\n================================"
+        )
+        print(
+            "INITIALIZING ANTIGRAVITY IMPLEMENTER"
+        )
+        print(
+            "================================"
+        )
+
+        automation = AntigravityAutomation()
+
+        implementer = AntigravityAdapter(
+            automation=automation
+        )
+
+        session = ImplementerSession(
+            project_name=setup.project_name,
+            project_path=setup.project_path,
+        )
+
+        manager = ImplementerManager(
+            implementer=implementer,
+            session=session,
+            phase_state=phase_state
+        )
+
+        # =====================================
+        # AUTONOMOUS MULTI-PHASE DEVELOPMENT LOOP
+        # =====================================
+
+        implementer_interaction_id = None
+
+        while True:
+
+            print(
+                "\n\n================================"
+            )
+            print(
+                f"STARTING PHASE "
+                f"{phase_state.current_phase}"
+            )
+            print(
+                f"ATTEMPT "
+                f"{phase_state.current_attempt}"
+            )
+            print(
+                "================================"
+            )
+
+            print(
+                "\nCurrent Task ID:",
+                worker_task.task_id
+            )
+
+            print(
+                "Current Objective:",
+                worker_task.objective
+            )
+
+            phase_result = run_phase(
+                worker_task=worker_task,
+                phase_state=phase_state,
+                workflow=workflow,
+                manager=manager,
+                claude=claude,
+                project_name=setup.project_name,
+                project_path=setup.project_path,
+                event_callback=event_callback,
+            )
+
+            implementer_interaction_id = (
+                phase_result.implementer_interaction_id
+            )
+            review_result = phase_result.review_result
+
+            # =================================
+            # HANDLE REVIEW DECISION
+            # =================================
+
+            # =========================
+            # NEXT PHASE
+            # =========================
+
+            if (
+                review_result.decision == "APPROVED"
+                and review_result.next_action == "NEXT_PHASE"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "PHASE APPROVED"
+                )
+                print(
+                    "PREPARING NEXT PHASE"
+                )
+                print(
+                    "================================"
+                )
+
+                if summary is not None:
+                    summary.phase_history.append(
+                        PhaseRecord(
+                            phase_number=phase_state.current_phase,
+                            attempts=phase_state.current_attempt,
+                            objective=worker_task.objective,
+                            final_decision=review_result.decision,
+                            status="COMPLETED",
+                            summary=review_result.summary,
+                            issues=review_result.issues,
+                            report_files=[phase_state.get_report_path()],
+                        )
+                    )
+                    summary.phases_completed += 1
+                    summary.total_attempts += phase_state.current_attempt
+
+                emit_event(
+                    event_callback,
+                    EventType.NEXT_PHASE,
+                    f"Phase {phase_state.current_phase} approved. Advancing to next phase...",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="SUCCESS",
+                    data={"next_phase": review_result.next_phase},
+                )
+
+                # Advance state first
+                phase_state.next_phase()
+
+                print(
+                    "\nAdvanced to Phase:",
+                    phase_state.current_phase
+                )
+
+                print(
+                    "Attempt:",
+                    phase_state.current_attempt
+                )
+
+                # Convert Reviewer-generated task
+                # directly into WorkerTask
+                worker_task = dispatch_next_phase(
+                    next_phase=review_result.next_phase,
+                    phase_number=phase_state.current_phase
+                )
+
+                workflow.transition(
+                    WorkflowState.READY_FOR_WORKER
+                )
+
+                # Start next phase
+                continue
+
+            # =========================
+            # RETRY SAME PHASE
+            # =========================
+
+            if (
+                review_result.next_action
+                == "RETRY_PHASE"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "RETRYING CURRENT PHASE"
+                )
+                print(
+                    "================================"
+                )
+
+                if summary is not None:
+                    summary.total_retries += 1
+
+                if phase_state.can_retry():
+
+                    emit_event(
+                        event_callback,
+                        EventType.RETRY_PHASE,
+                        f"Retrying Phase {phase_state.current_phase} (Attempt {phase_state.current_attempt + 1})...",
+                        phase=phase_state.current_phase,
+                        attempt=phase_state.current_attempt,
+                        level="WARNING",
+                        data={"decision": review_result.decision, "issues": review_result.issues},
+                    )
+
+                    phase_state.next_attempt()
+
+                    print(
+                        "\nRetrying Phase:",
+                        phase_state.current_phase
+                    )
+
+                    print(
+                        "New Attempt:",
+                        phase_state.current_attempt
+                    )
+
+                    # Same task reused
+                    continue
+
+                raise RuntimeError(
+                    f"Maximum attempts exceeded "
+                    f"for Phase "
+                    f"{phase_state.current_phase}"
+                )
+
+            # =========================
+            # PROJECT COMPLETE
+            # =========================
+
+            if (
+                review_result.next_action
+                == "STOP"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "PROJECT DEVELOPMENT COMPLETE"
+                )
+                print(
+                    "================================"
+                )
+
+                print(
+                    "Final Phase:",
+                    phase_state.current_phase
+                )
+
+                print(
+                    "Final Summary:",
+                    review_result.summary
+                )
+
+                if summary is not None:
+                    summary.phase_history.append(
+                        PhaseRecord(
+                            phase_number=phase_state.current_phase,
+                            attempts=phase_state.current_attempt,
+                            objective=worker_task.objective,
+                            final_decision=review_result.decision,
+                            status="COMPLETED",
+                            summary=review_result.summary,
+                            issues=review_result.issues,
+                            report_files=[phase_state.get_report_path()],
+                        )
+                    )
+                    summary.phases_completed += 1
+                    summary.total_attempts += phase_state.current_attempt
+                    summary.mark_completed("SUCCESSFULLY COMPLETED")
+                    try:
+                        final_report_file = save_final_report(summary)
+                        save_project_execution(
+                            project_name=summary.project_name,
+                            project_path=summary.project_path,
+                            final_status=summary.final_status,
+                            phases_completed=summary.phases_completed,
+                            total_attempts=summary.total_attempts,
+                            started_at=summary.started_at,
+                            completed_at=summary.completed_at or "",
+                            summary_report=str(final_report_file),
+                        )
+                    except Exception as rep_err:
+                        print(f"[WARN] Error saving final project report: {rep_err}")
+                        final_report_file = None
+
+                    emit_event(
+                        event_callback,
+                        EventType.PROJECT_COMPLETED,
+                        "Project development successfully completed!",
+                        phase=phase_state.current_phase,
+                        attempt=phase_state.current_attempt,
+                        level="SUCCESS",
+                        data={
+                            "report_path": str(final_report_file) if final_report_file else None,
+                            "summary": summary,
+                        },
+                    )
+
+                break
+
+            # =========================
+            # REPLAN REQUIRED
+            # =========================
+
+            if (
+                review_result.next_action
+                == "REPLAN"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "REPLAN REQUIRED"
+                )
+                print(
+                    "================================"
+                )
+
+                print(
+                    review_result.summary
+                )
+
+                if summary is not None:
+                    summary.phase_history.append(
+                        PhaseRecord(
+                            phase_number=phase_state.current_phase,
+                            attempts=phase_state.current_attempt,
+                            objective=worker_task.objective,
+                            final_decision=review_result.decision,
+                            status="FAILED",
+                            summary=review_result.summary,
+                            issues=review_result.issues,
+                            report_files=[phase_state.get_report_path()],
+                        )
+                    )
+                    summary.total_attempts += phase_state.current_attempt
+                    summary.mark_completed("BLOCKED", error="Reviewer requested replanning: " + review_result.summary)
+                    try:
+                        save_final_report(summary)
+                    except Exception:
+                        pass
+
+                emit_event(
+                    event_callback,
+                    EventType.PROJECT_BLOCKED,
+                    f"Workflow replan requested: {review_result.summary}",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="ERROR",
+                    data={"summary": review_result.summary},
+                )
+
+                raise RuntimeError(
+                    "Reviewer requested replanning"
+                )
+
+            # =========================
+            # BLOCKED
+            # =========================
+
+            if (
+                review_result.decision
+                == "BLOCKED"
+            ):
+
+                print(
+                    "\n================================"
+                )
+                print(
+                    "WORKFLOW BLOCKED"
+                )
+                print(
+                    "================================"
+                )
+
+                if summary is not None:
+                    summary.phase_history.append(
+                        PhaseRecord(
+                            phase_number=phase_state.current_phase,
+                            attempts=phase_state.current_attempt,
+                            objective=worker_task.objective,
+                            final_decision=review_result.decision,
+                            status="FAILED",
+                            summary=review_result.summary,
+                            issues=review_result.issues,
+                            report_files=[phase_state.get_report_path()],
+                        )
+                    )
+                    summary.total_attempts += phase_state.current_attempt
+                    summary.mark_completed("BLOCKED", error=review_result.summary)
+                    try:
+                        save_final_report(summary)
+                    except Exception:
+                        pass
+
+                emit_event(
+                    event_callback,
+                    EventType.PROJECT_BLOCKED,
+                    f"Workflow blocked: {review_result.summary}",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="ERROR",
+                    data={"summary": review_result.summary},
+                )
+
+                raise RuntimeError(
+                    review_result.summary
+                )
+
+            # =========================
+            # UNKNOWN RESULT
+            # =========================
+
+            raise RuntimeError(
+                "Unhandled reviewer decision: "
+                f"{review_result.decision} / "
+                f"{review_result.next_action}"
+            )
+
+        # =========================
+        # FINAL SUMMARY
+        # =========================
+
+        print(
+            "\n================================"
+        )
+        print(
+            "AI DEVELOPMENT ORCHESTRATOR"
+        )
+        print(
+            "WORKFLOW COMPLETE"
+        )
+        print(
+            "================================"
+        )
+
+        print(
+            "Final Workflow State:",
+            workflow.current_state.name
+        )
+
+        print(
+            "Final Phase:",
+            phase_state.current_phase
+        )
+
+        print(
+            "Planner Interaction ID:",
+            planner_interaction_id
+        )
+
+        print(
+            "Last Implementer Interaction ID:",
+            implementer_interaction_id
+        )
+
+        print(
+            "================================\n"
+        )
+
+    except Exception as error:
+
+        if 'workflow' in locals():
+            workflow.transition(
+                WorkflowState.ERROR
+            )
+
+        if summary is not None and summary.final_status == "IN_PROGRESS":
+            summary.mark_completed("FAILED", error=str(error))
+            try:
+                save_final_report(summary)
+            except Exception:
+                pass
+
+        curr_phase = phase_state.current_phase if 'phase_state' in locals() else 1
+        curr_attempt = phase_state.current_attempt if 'phase_state' in locals() else 1
+
+        emit_event(
+            event_callback,
+            EventType.PROJECT_FAILED,
+            f"Workflow failed: {error}",
+            phase=curr_phase,
+            attempt=curr_attempt,
+            level="ERROR",
+            data={"error": str(error)},
+        )
+
+        print(
+            "\n================================"
+        )
+        print(
+            "WORKFLOW FAILED"
+        )
+        print(
+            "Error:",
+            error
+        )
+        print(
+            "================================\n"
+        )
