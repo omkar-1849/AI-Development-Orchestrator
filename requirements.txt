@@ -1,3 +1,4 @@
 pywinauto
 pyperclip
 pywin32
+pyautogui
