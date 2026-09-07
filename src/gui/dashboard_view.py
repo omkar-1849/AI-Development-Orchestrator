@@ -21,6 +21,7 @@ class DashboardView(tk.Frame):
         ("REPORT", "Report Detection"),
         ("REVIEWER", "Reviewer"),
         ("DECISION", "Decision Engine"),
+        ("HANDOFF", "Final Handoff"),
     ]
 
     # Stage mappings from EventType
@@ -43,6 +44,9 @@ class DashboardView(tk.Frame):
         EventType.REVIEW_REJECTED: ("REVIEWER", "COMPLETED"),
         EventType.NEXT_PHASE: ("DECISION", "COMPLETED"),
         EventType.RETRY_PHASE: ("DECISION", "RUNNING"),
+        EventType.HANDOFF_STARTED: ("HANDOFF", "RUNNING"),
+        EventType.HANDOFF_PREPARING: ("HANDOFF", "RUNNING"),
+        EventType.HANDOFF_COMPLETED: ("HANDOFF", "COMPLETED"),
         EventType.PROJECT_COMPLETED: ("DECISION", "COMPLETED"),
         EventType.PROJECT_BLOCKED: ("DECISION", "FAILED"),
         EventType.PROJECT_FAILED: ("DECISION", "FAILED"),
@@ -294,7 +298,7 @@ class DashboardView(tk.Frame):
 
         self.view_report_btn = tk.Button(
             btn_box,
-            text="📄 View Final Report",
+            text="📋 View Project Handoff",
             font=("Segoe UI", 9, "bold"),
             bg="#6366f1",
             fg="#ffffff",
@@ -424,7 +428,7 @@ class DashboardView(tk.Frame):
 
         # 6. Handle terminal events
         if event.event_type == EventType.PROJECT_COMPLETED:
-            self.set_completed(success=True, message="PROJECT COMPLETED ✓")
+            self.set_completed(success=True, message="PROJECT COMPLETED & READY ✓")
         elif event.event_type in (EventType.PROJECT_FAILED, EventType.PROJECT_BLOCKED):
             self.set_completed(success=False, message=f"PROJECT {event.event_type.value} ✗")
 

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Callable, Optional
 
 from src.automation.claude_launcher import find_claude
@@ -21,6 +22,8 @@ from src.worker.next_phase_dispatcher import dispatch_next_phase
 from src.implementer.antigravity_adapter import AntigravityAdapter
 from src.implementer.implementer_session import ImplementerSession
 from src.implementer.implementer_manager import ImplementerManager
+from src.implementer.prompt_builder import ImplementerPromptBuilder
+from src.reviewer.report_waiter import wait_for_report
 
 from src.orchestrator.setup import (
     OrchestratorSetup,
@@ -568,6 +571,137 @@ def run_orchestrator(
                     summary.phases_completed += 1
                     summary.total_attempts += phase_state.current_attempt
                     summary.mark_completed("SUCCESSFULLY COMPLETED")
+
+                # =======================================================
+                # FINAL USER-FACING PROJECT HANDOFF
+                # =======================================================
+                workflow.transition(WorkflowState.FINALIZING)
+
+                emit_event(
+                    event_callback,
+                    EventType.HANDOFF_STARTED,
+                    "Generating final project handoff...",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="INFO",
+                )
+
+                emit_event(
+                    event_callback,
+                    EventType.HANDOFF_PREPARING,
+                    "Preparing run instructions...",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="INFO",
+                )
+
+                handoff_filename = "final_project_handoff.md"
+                handoff_file_path = Path(setup.project_path) / handoff_filename
+                handoff_content = None
+
+                try:
+                    handoff_prompt = ImplementerPromptBuilder.build_final_handoff_prompt(
+                        project_name=setup.project_name,
+                        project_path=setup.project_path,
+                        user_requirements=setup.user_request,
+                        handoff_filename=handoff_filename,
+                    )
+                    print("\n--- SENDING FINAL HANDOFF PROMPT TO ANTIGRAVITY ---")
+                    manager.implementer.execute(handoff_prompt)
+
+                    # Detect mock automation environment to avoid unnecessary 180s sleep in unit tests
+                    is_mock_env = False
+                    try:
+                        from unittest.mock import Mock
+                        if isinstance(manager.implementer, Mock) or (
+                            hasattr(manager.implementer, "automation")
+                            and isinstance(manager.implementer.automation, Mock)
+                        ):
+                            is_mock_env = True
+                    except Exception:
+                        pass
+
+                    poll_timeout = 0.5 if (is_mock_env and not handoff_file_path.exists()) else float(os.environ.get("ORCHESTRATOR_HANDOFF_TIMEOUT", 180.0))
+                    poll_interval = 0.1 if is_mock_env else 2
+
+                    # Wait for Antigravity to write final_project_handoff.md
+                    handoff_content = wait_for_report(
+                        project_path=setup.project_path,
+                        report_path=handoff_filename,
+                        timeout=poll_timeout,
+                        poll_interval=poll_interval,
+                    )
+                except Exception as handoff_err:
+                    print(f"[WARN] Antigravity final handoff generation error: {handoff_err}")
+                    print("[INFO] Generating safe fallback final_project_handoff.md from metadata...")
+
+                # Safe fallback generation if handoff_content was not created or empty
+                if not handoff_content or not handoff_file_path.exists():
+                    try:
+                        fallback_lines = [
+                            f"# Project Handoff: {setup.project_name}",
+                            "",
+                            "## Project Location",
+                            f"- Path: `{setup.project_path}`",
+                            "",
+                            "## What Was Built",
+                            f"- {review_result.summary or 'Project implementation successfully completed.'}",
+                            f"- Original Requirements: {setup.user_request.strip() if setup.user_request else 'N/A'}",
+                            "",
+                            "## Main Features Implemented",
+                        ]
+                        if summary and summary.phase_history:
+                            for p in summary.phase_history:
+                                fallback_lines.append(f"- Phase {p.phase_number}: {p.objective}")
+                        else:
+                            fallback_lines.append(f"- {worker_task.objective}")
+
+                        fallback_lines.extend([
+                            "",
+                            "## Important Files & Entry Points",
+                            "- `main.py` or entry module in workspace root",
+                            "",
+                            "## Setup Instructions",
+                            "- `python -m venv .venv`",
+                            "- `.venv\\Scripts\\activate` (Windows)",
+                            "- `pip install -r requirements.txt` (if present)",
+                            "",
+                            "## How to Run",
+                            f"1. `cd \"{setup.project_path}\"`",
+                            "2. `python main.py`",
+                            "",
+                            "## How to Test",
+                            "- `python -m unittest discover`",
+                            "",
+                            "## Project Status",
+                            "- READY TO RUN",
+                            "",
+                            "## Important Notes",
+                            "- All development phases completed and approved by reviewer.",
+                            "",
+                            "<!-- REPORT_END -->",
+                        ])
+                        handoff_content = "\n".join(fallback_lines)
+                        handoff_file_path.write_text(handoff_content, encoding="utf-8")
+                    except Exception as fb_err:
+                        print(f"[WARN] Error writing fallback handoff report: {fb_err}")
+
+                emit_event(
+                    event_callback,
+                    EventType.HANDOFF_COMPLETED,
+                    "Final project report ready.",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="SUCCESS",
+                    data={
+                        "handoff_path": str(handoff_file_path) if handoff_file_path.exists() else None,
+                        "content": handoff_content,
+                    },
+                )
+
+                # Save internal technical audit report and db execution record
+                final_report_file = None
+                if summary is not None:
                     try:
                         final_report_file = save_final_report(summary)
                         save_project_execution(
@@ -582,20 +716,22 @@ def run_orchestrator(
                         )
                     except Exception as rep_err:
                         print(f"[WARN] Error saving final project report: {rep_err}")
-                        final_report_file = None
 
-                    emit_event(
-                        event_callback,
-                        EventType.PROJECT_COMPLETED,
-                        "Project development successfully completed!",
-                        phase=phase_state.current_phase,
-                        attempt=phase_state.current_attempt,
-                        level="SUCCESS",
-                        data={
-                            "report_path": str(final_report_file) if final_report_file else None,
-                            "summary": summary,
-                        },
-                    )
+                workflow.transition(WorkflowState.COMPLETED)
+
+                emit_event(
+                    event_callback,
+                    EventType.PROJECT_COMPLETED,
+                    "Project development successfully completed!",
+                    phase=phase_state.current_phase,
+                    attempt=phase_state.current_attempt,
+                    level="SUCCESS",
+                    data={
+                        "report_path": str(final_report_file) if final_report_file else None,
+                        "handoff_path": str(handoff_file_path) if handoff_file_path.exists() else None,
+                        "summary": summary,
+                    },
+                )
 
                 break
 

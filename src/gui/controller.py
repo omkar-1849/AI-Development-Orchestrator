@@ -25,6 +25,7 @@ class OrchestratorController:
         self.project_path: Optional[str] = None
         self.requirements: str = ""
         self.is_running: bool = False
+        self.handoff_report_path: Optional[str] = None
         self.final_report_path: Optional[str] = None
         self.final_status: str = "IDLE"  # IDLE, RUNNING, COMPLETED, FAILED, BLOCKED
         self.last_error: Optional[str] = None
@@ -62,6 +63,7 @@ class OrchestratorController:
         self.project_name = project_name.strip()
         self.requirements = requirements.strip()
         self.project_path = None
+        self.handoff_report_path = None
         self.final_report_path = None
         self.final_status = "RUNNING"
         self.last_error = None
@@ -119,10 +121,14 @@ class OrchestratorController:
         # Track important paths & statuses
         if event.event_type == EventType.PROJECT_WORKSPACE_CREATED and event.data:
             self.project_path = event.data.get("project_path")
+        elif event.event_type == EventType.HANDOFF_COMPLETED and event.data:
+            self.handoff_report_path = event.data.get("handoff_path")
         elif event.event_type == EventType.PROJECT_COMPLETED:
             self.final_status = "COMPLETED"
             if event.data:
                 self.final_report_path = event.data.get("report_path")
+                if not self.handoff_report_path and event.data.get("handoff_path"):
+                    self.handoff_report_path = event.data.get("handoff_path")
         elif event.event_type == EventType.PROJECT_BLOCKED:
             self.final_status = "BLOCKED"
         elif event.event_type == EventType.PROJECT_FAILED:
@@ -145,9 +151,40 @@ class OrchestratorController:
                 break
         return events
 
+    def get_handoff_report_content(self) -> str:
+        """Read and return user-facing final project handoff report text if available."""
+        # 1. Try recorded handoff report path
+        if self.handoff_report_path and os.path.exists(self.handoff_report_path):
+            try:
+                with open(self.handoff_report_path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception as exc:
+                return f"Error reading handoff report: {exc}"
+
+        # 2. Try looking in project workspace
+        if self.project_path:
+            candidate = Path(self.project_path) / "final_project_handoff.md"
+            if candidate.exists():
+                try:
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        return f.read()
+                except Exception as exc:
+                    return f"Error reading handoff report: {exc}"
+
+        return "Final project handoff report is not yet available."
+
     def get_final_report_content(self) -> str:
-        """Read and return final project report text if available."""
-        # 1. Try recorded report path
+        """
+        Read and return user-facing report text.
+        Primary: final_project_handoff.md
+        Fallback: final_project_report.md
+        """
+        # Primary: check if handoff report is available
+        handoff = self.get_handoff_report_content()
+        if handoff and not handoff.startswith("Final project handoff report is not yet available"):
+            return handoff
+
+        # Fallback 1: Try recorded report path
         if self.final_report_path and os.path.exists(self.final_report_path):
             try:
                 with open(self.final_report_path, "r", encoding="utf-8") as f:
@@ -155,7 +192,7 @@ class OrchestratorController:
             except Exception as exc:
                 return f"Error reading report: {exc}"
 
-        # 2. Try looking in project workspace
+        # Fallback 2: Try looking in project workspace
         if self.project_path:
             candidate = Path(self.project_path) / "final_project_report.md"
             if candidate.exists():
@@ -189,6 +226,7 @@ class OrchestratorController:
         self.project_path = None
         self.requirements = ""
         self.is_running = False
+        self.handoff_report_path = None
         self.final_report_path = None
         self.final_status = "IDLE"
         self.last_error = None

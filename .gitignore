@@ -28,6 +28,7 @@ final_project_report.md
 
 # Automation runtime/cache files
 *_cache.json
+data/*_cache.json
 
 # IDE
 .vscode/

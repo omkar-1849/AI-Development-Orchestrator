@@ -165,3 +165,55 @@ Keep the chat response concise.
 
 Start now.
 """.strip()
+
+    @staticmethod
+    def build_final_handoff_prompt(
+        project_name: str,
+        project_path: str,
+        user_requirements: str,
+        handoff_filename: str = "final_project_handoff.md",
+    ) -> str:
+        req_summary = user_requirements.strip() if user_requirements else "Project implementation"
+        return f"""
+FINAL PROJECT HANDOFF TASK
+
+Project Name: {project_name}
+Project Location: {project_path}
+
+Context:
+All development phases for this project have been successfully completed and approved by the reviewer.
+Your final task is to inspect the completed project workspace and generate a concise, practical, user-facing final handoff report.
+
+Requirements context:
+{req_summary}
+
+IMPORTANT RULES:
+- Inspect the actual completed project workspace at: {project_path}
+- The report is written for the END USER who wants to understand, run, and test this project.
+- Do NOT generate a technical audit, code dump, architectural essay, or internal debugging logs.
+- Provide simple, copy-pasteable commands for running and testing.
+- Keep the tone helpful, clear, and practical.
+
+Write the final handoff report EXACTLY to:
+{project_path}/{handoff_filename}
+
+Do not choose another filename.
+
+The report MUST be structured in Markdown and include:
+1. # Project Handoff: {project_name}
+2. ## Project Location
+   - Path: `{project_path}`
+3. ## What Was Built (Short description/overview)
+4. ## Main Features Implemented (Bulleted list)
+5. ## Important Files & Entry Points (e.g., main.py, app.py, key modules)
+6. ## Setup Instructions (e.g., python -m venv .venv, pip install -r requirements.txt)
+7. ## How to Run (Step-by-step simple commands to launch the application)
+8. ## How to Test (Command to execute tests, e.g. python -m unittest discover)
+9. ## Project Status (e.g., READY TO RUN)
+10. ## Important Notes (Any operational notes, prerequisites, or limitations)
+
+The FINAL line of the report MUST be:
+<!-- REPORT_END -->
+
+Start inspecting the workspace and create {handoff_filename} now.
+""".strip()
